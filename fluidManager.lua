@@ -26,14 +26,6 @@
 ---@field peripheral ccTweaked.peripheral.FluidStorage
 ---@field getTank fun():tankPeripheralTank
 
-settings.define("fluids.products", 
-    { 
-        ["description"] = "A table describing the metals to mix as well as their recipes",
-        ["default"] = nil,
-        ["type"] = "table"
-    }
-)
-
 settings.define("fluids.minimumThreshold",
     {
         ["description"] = "The percentage (0.0 to 1.0) minimum amount of product that needs to be in a tank before it's eligible to be used to create more product",
@@ -42,7 +34,7 @@ settings.define("fluids.minimumThreshold",
     }
 )
 
-local minimumThreshold = 0.75
+local minimumThreshold = 0.5
 
 print("Initializing Fluid Manager")
 
@@ -81,13 +73,13 @@ local function creatTankObject(name, wrapped)
 end
 
 ---@type { [string]: tankPeripheral }
-local tanks = {} -- tanks[product] = tank peripheral
+local tanks -- tanks[product] = tank peripheral
 
 ---@type mixerPeripheral[]
-local freeMixers = {} -- freeMixers[..] = mixer peripheral
+local freeMixers -- freeMixers[..] = mixer peripheral
 
 ---@type tankPeripheral[]
-local freeTanks = {} -- freeTanks[..] = tank peripheral
+local freeTanks -- freeTanks[..] = tank peripheral
 
 local foundry = nil -- peripheral.find("fluid_storage", "hephaestus:foundry_controller?")
 local trash = nil -- peripheral.find("fluid_storage",) fluid trash can
@@ -104,6 +96,8 @@ local config = nil
 ---@param sourceMixer mixerPeripheral
 ---@param fluidInfo tankPeripheralTank
 local function returnFluid(sourceMixer, fluidInfo)
+    if not fluidInfo or fluidInfo.name == "minecraft:empty" then return end
+
     local tank = tanks[fluidInfo.name]
     
     if not tank then
@@ -137,6 +131,7 @@ end
 ---@param tank tankPeripheralTank
 ---@return number
 local function getRelativeAmount(tank)
+    --print("TANK CAPS", tank.amount, tank.capacity)
     return (tank.amount or 0) / (tank.capacity or 1)
 end
 
@@ -166,8 +161,8 @@ local function occupyMixerFor(product)
             return false
         end
 
-        if minimumThreshold <= getRelativeAmount(src.getTank()) then
-            printError("Not enough of product "..v.." to mix product "..product.product)
+        if minimumThreshold >= getRelativeAmount(src.getTank()) then
+            printError("Not enough of product "..v.." to mix product "..product.product.." current amount: "..getRelativeAmount(src.getTank())..", expected at least: "..minimumThreshold)
             return false
         end
 
@@ -239,7 +234,7 @@ local function mixProduct(productInfo)
     end
 
     if getRelativeAmount(productStorage.getTank()) >= (productInfo.cutoff or .8) then
-        printError("Cutting off and relasing mixer for product "..productInfo.product)
+        printError("Cutting off and relasing mixer for product "..productInfo.product.." since it has "..getRelativeAmount(productStorage.getTank()).." and a cutoff threshold of "..(productInfo.cutoff or .8))
         releaseMixerFrom(productInfo)
         return false
     end
@@ -248,30 +243,60 @@ local function mixProduct(productInfo)
     print("Performing mixing routine for "..productInfo.product)
 
     local constituentsLiquids = {}
+    
     for __, constituentLiquid in ipairs(productInfo.recipe.fluids) do
-        constituentsLiquids[constituentLiquid] = 0
+        constituentsLiquids[constituentLiquid] = true
     end
+
     for _, tank in ipairs(mixer.tanks()) do -- we top off all the liquids and extract the product
-        if tank.name == productInfo.product then
-            print("Extracting resulting product "..productInfo.product)
-            returnFluid(productInfo.facility, tank)
-        end
-
-        if not contains(productInfo.recipe.fluids, tank.name) then
-            print("Extracting unused product "..productInfo.product)
-            returnFluid(productInfo.facility, tank)
-        end
-
-        if getRelativeAmount(tank) < 1.0 then
-            local src = tanks[tank.name]
-            if not src or minimumThreshold > getRelativeAmount(src.getTank()) then 
-                printError("Source product "..src.getTank().name.." is too low, releasing mixer for product "..productInfo.product)
-                releaseMixerFrom(productInfo)
-                return true
+        if tank.name ~= "minecraft:empty" then
+        
+            if tank.name == productInfo.product then
+                print("Extracting resulting product "..tank.name)
+                returnFluid(productInfo.facility, tank)
             end
-            print("Pushing source product "..src.getTank().name.." to mixer to produce "..productInfo.product)
-            src.peripheral.pushFluid(productInfo.facility.name, tank.capacity - tank.amount, tank.name)
+    
+            if not contains(productInfo.recipe.fluids, tank.name) then
+                print("Extracting unused product "..tank.name)
+                returnFluid(productInfo.facility, tank)
+            end
+    
+            if getRelativeAmount(tank) < 1.0 then
+                local src = tanks[tank.name]
+                if not src then
+                    printError("No source product "..tank.name.." available, releasing mixer for product "..productInfo.product)
+                    releaseMixerFrom(productInfo)
+                    return true
+                end
+                if minimumThreshold > getRelativeAmount(src.getTank()) then 
+                    printError("Source product "..tank.name.." is too low, releasing mixer for product "..productInfo.product)
+                    releaseMixerFrom(productInfo)
+                    return true
+                end
+                print("Pushing source product "..src.getTank().name.." to mixer to produce "..productInfo.product)
+                constituentsLiquids[tank.name] = nil
+                src.peripheral.pushFluid(productInfo.facility.name, tank.capacity - tank.amount, tank.name)
+            end
+            
         end
+    end
+
+    for constituent, _ in pairs(constituentsLiquids) do
+        
+        local src = tanks[constituent]
+        if not src then
+            printError("No source product "..constituent.." available, releasing mixer for product "..productInfo.product)
+            releaseMixerFrom(productInfo)
+            return true
+        end
+        if minimumThreshold > getRelativeAmount(src.getTank()) then 
+            printError("Source product "..constituent.." is too low, releasing mixer for product "..productInfo.product)
+            releaseMixerFrom(productInfo)
+            return true
+        end
+        print("Pushing source product "..src.getTank().name.." to mixer to produce "..productInfo.product)
+        src.peripheral.pushFluid(productInfo.facility.name, 1000, constituent)
+
     end
 
     local constituentsItems = {}
@@ -307,6 +332,8 @@ local function mixProduct(productInfo)
 end
 
 local function mixAllProducts()
+    term.clear()
+    term.setCursorPos(1,1)
     -- this function is responsible for occupying mixers, and performing mixing on all pending productions
     ---@type configEntry[]
     local notProduced = {}
@@ -334,9 +361,13 @@ end
 local function reloadTankConfig()
     print("-------- Loading tank config")
     print("Reading mixer settings")
-    minimumThreshold = settings.get("fluids.minimumTreshold", 0.75)
+    minimumThreshold = settings.get("fluids.minimumTreshold", 0.5)
 
-    config = settings.get("fluids.products")
+    tanks = {}
+    freeMixers = {}
+    freeTanks = {}
+    config = loadfile("setup.lua")()
+
     local foundTanks = false
     assert(type(config) == "table", "config is unexpectedly nil or not a table")
 
@@ -350,11 +381,11 @@ local function reloadTankConfig()
 
         local actualTank = peri.getTank()
 
-        if not actualTank then 
+        if not actualTank or actualTank.name == "minecraft:empty" then 
             print("Found empty tank "..name)
             table.insert(freeTanks, peri)
         else
-            print("Found tank "..name.." with "..peri.getTank().name)
+            print("Found tank "..name.." with "..actualTank.name)
             tanks[actualTank.name] = peri
         end
 
@@ -362,7 +393,6 @@ local function reloadTankConfig()
         elseif string.find(name, "create:basin", 1, true) then
             ---@diagnostic disable-next-line: param-type-mismatch
             local peri = createMixerObject(name, wrapped)
-            print("Found product mixer")
             table.insert(freeMixers, peri)
         end
        return false
@@ -387,7 +417,7 @@ return function()
     while true do
         if (os.clock() - lastReload) > 60 then reloadTankConfig(); lastReload = os.clock() end
         mixAllProducts()
-        os.sleep(1)
+        os.sleep(3)
     end
 end
 

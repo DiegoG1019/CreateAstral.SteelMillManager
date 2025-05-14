@@ -1,20 +1,23 @@
+print("Initializing")
+
 do
     local monitor = peripheral.find("monitor")
     if monitor then term.redirect(monitor) end
 end
 
+local op = print
 function printError(...)
     term.setTextColor(colors.red)
-    print(...)
+    op("!>",...)
 end
 
 function print(...)
     term.setTextColor(colors.cyan)
-    print(...)
+    op(">>",...)
 end
 
 local function dumpError(msg)
-  local dump = assert(fs.open("error.log", "w"))
+  local dump = assert(fs.open("error.log", "a"))
   dump.write(msg)
   dump.close()
 end
