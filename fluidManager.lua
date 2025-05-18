@@ -6,25 +6,54 @@
 ---@field items string[]
 ---@field fluids string[]
 
----@class configEntry
+---@class mixingEntry
 ---@field product string
 ---@field cutoff number The percentage threshold of product in the tank at which production is cutoff, its constituents returned, and the mixer released 
 ---@field recipe productRecipe
 ---@field facility mixerPeripheral|nil
+---@field heatLevel number|nil The heat value. Only acceptable levels are: 0, 1 and 2. Ignored if fluids.heatEnabled is false or nil
+
+---@class heatPair
+---@field mixer number
+---@field burner number
+
+---@class config
+---@field mixing mixingEntry[]
+---@field heatPairs heatPair[]
 
 ---@class tankPeripheralTank
 ---@field name string
 ---@field amount number
 ---@field capacity number
 
+---@class melterPeripheral
+---@field name string
+---@field type string
+---@field peripheral ccTweaked.peripheral.FluidStorage|ccTweaked.peripheral.Inventory
+---@field getTank fun():tankPeripheralTank
+
 ---@class mixerPeripheral
 ---@field name string
+---@field type string
+---@field burner burnerPeripheral|nil
 ---@field peripheral ccTweaked.peripheral.FluidStorage|ccTweaked.peripheral.Inventory
 
 ---@class tankPeripheral
 ---@field name string
+---@field type string
 ---@field peripheral ccTweaked.peripheral.FluidStorage
 ---@field getTank fun():tankPeripheralTank
+
+---@class foundryPeripheral
+---@field name string
+---@field type string
+---@field peripheral ccTweaked.peripheral.FluidStorage
+
+---@class burnerPeripheral
+---@field name string
+---@field type string
+---@field peripheral ccTweaked.peripheral.FluidStorage
+---@field refill fun(seedOilTank:ccTweaked.peripheral.FluidStorage)
 
 settings.define("fluids.minimumThreshold",
     {
@@ -34,7 +63,7 @@ settings.define("fluids.minimumThreshold",
     }
 )
 
-local minimumThreshold = 0.5
+local minimumThreshold
 
 print("Initializing Fluid Manager")
 
@@ -58,18 +87,47 @@ local function getCreateModTankObject(fluidPeripheral)
     return actualTank
 end
 
+---@param burner burnerPeripheral
+---@param seedOilTank ccTweaked.peripheral.FluidStorage
+local function blazeBurnerRefill(burner, seedOilTank)
+    seedOilTank.pushFluid(burner.name, nil, "createaddition:seed_oil")
+end
+
 ---@param name string
 ---@param wrapped ccTweaked.peripheral.FluidStorage|ccTweaked.peripheral.Inventory
 ---@return mixerPeripheral
 local function createMixerObject(name, wrapped)
-    return { ["name"] = name, ["peripheral"] = wrapped  }
+    return { ["name"] = name, ["peripheral"] = wrapped, ["type"] = "mixer"  }
 end
 
 ---@param name string
 ---@param wrapped ccTweaked.peripheral.FluidStorage
 ---@return tankPeripheral
 local function creatTankObject(name, wrapped)
-    return { ["name"] = name, ["peripheral"] = wrapped, ["getTank"] = function() return getCreateModTankObject(wrapped) end  }
+    return { ["name"] = name, ["peripheral"] = wrapped, ["type"] = "tank", ["getTank"] = function() return getCreateModTankObject(wrapped) end  }
+end
+
+---@param name string
+---@param wrapped ccTweaked.peripheral.FluidStorage|ccTweaked.peripheral.Inventory
+---@return melterPeripheral
+local function createMelterObject(name, wrapped)
+    return { ["name"] = name, ["peripheral"] = wrapped, ["type"] = "melter", ["getTank"] = function() return getCreateModTankObject(wrapped) end  }
+end
+
+---@param name string
+---@param wrapped ccTweaked.peripheral.FluidStorage
+---@return foundryPeripheral
+local function createFoundryObject(name, wrapped)
+    return { ["name"] = name, ["peripheral"] = wrapped, ["type"] = "foundry" }
+end
+
+---@param name string
+---@param wrapped ccTweaked.peripheral.FluidStorage
+---@return burnerPeripheral
+local function createBurnerObject(name, wrapped)
+    local burner = { ["name"] = name, ["peripheral"] = wrapped, ["type"] = "burner" }
+    burner.refill = function(sourceTank) blazeBurnerRefill(burner, sourceTank) end
+    return burner
 end
 
 ---@type { [string]: tankPeripheral }
@@ -81,21 +139,24 @@ local freeMixers -- freeMixers[..] = mixer peripheral
 ---@type tankPeripheral[]
 local freeTanks -- freeTanks[..] = tank peripheral
 
+---@type melterPeripheral[]
+local melters
+
 local foundry = nil -- peripheral.find("fluid_storage", "hephaestus:foundry_controller?")
 local trash = nil -- peripheral.find("fluid_storage",) fluid trash can
 
 ---@type inventoryPeripheral
 local itemStorage = nil -- peripheral.find("inventory", "create:") I don't remember what it's called
 
----@type configEntry[]
+---@type config
 local config = nil
 -- config[..] = { ["product"] = productName, ["cutoff"] = (0.0, 1.0), ["recipe"] = {"constituents"..} }
 
 -- !!!!!!!!!!!!!!!!!!!!!!!!!! write the print statements for the script
 
----@param sourceMixer mixerPeripheral
+---@param source mixerPeripheral|melterPeripheral
 ---@param fluidInfo tankPeripheralTank
-local function returnFluid(sourceMixer, fluidInfo)
+local function returnFluid(source, fluidInfo)
     if not fluidInfo or fluidInfo.name == "minecraft:empty" then return end
 
     local tank = tanks[fluidInfo.name]
@@ -109,7 +170,7 @@ local function returnFluid(sourceMixer, fluidInfo)
         tanks[fluidInfo.name] = tank
     end
 
-    sourceMixer.peripheral.pushFluid(tank.name, nil, fluidInfo.name)
+    source.peripheral.pushFluid(tank.name, nil, fluidInfo.name)
 end
 
 ---@param sourceMixer mixerPeripheral
@@ -135,7 +196,7 @@ local function getRelativeAmount(tank)
     return (tank.amount or 0) / (tank.capacity or 1)
 end
 
----@param product configEntry
+---@param product mixingEntry
 ---@return boolean
 local function occupyMixerFor(product)
     if product.facility then
@@ -180,7 +241,7 @@ local function occupyMixerFor(product)
     return true
 end
 
----@param product configEntry
+---@param product mixingEntry
 ---@return tankPeripheral|nil
 local function getTankPeripheralFor(product) 
     local t = tanks[product.product]
@@ -202,7 +263,7 @@ local function getTankPeripheralFor(product)
     return t
 end
 
----@param product configEntry
+---@param product mixingEntry
 ---@return boolean
 local function releaseMixerFrom(product)
     if product.facility then
@@ -217,7 +278,7 @@ local function releaseMixerFrom(product)
     return true
 end
 
----@param productInfo configEntry
+---@param productInfo mixingEntry
 ---@return boolean
 local function mixProduct(productInfo)
     if not productInfo.facility then
@@ -325,6 +386,18 @@ local function mixProduct(productInfo)
         end
     end
 
+    if productInfo.heatLevel and productInfo.heatLevel > 0 then
+        local seedOilTank = tanks["createaddition:seed_oil"]
+        if not seedOilTank then
+            printError("Could not find a seed oil tank to turn on heater to mix product "..productInfo.product)
+            releaseMixerFrom(productInfo)
+            return false
+        end
+
+        assert(productInfo.facility.burner)
+        productInfo.facility.burner.refill(seedOilTank.peripheral)
+    end
+
     return true
 
     -- this function is responsible for filling, topping off, and extracting product. It's a reentrant function
@@ -335,12 +408,18 @@ local function mixAllProducts()
     term.clear()
     term.setCursorPos(1,1)
     -- this function is responsible for occupying mixers, and performing mixing on all pending productions
-    ---@type configEntry[]
+    ---@type mixingEntry[]
     local notProduced = {}
+
+    print("Attempting to extract from melters and foundry")
+
+    for i,v in ipairs(melters) do
+        returnFluid(v, v.getTank())
+    end
 
     print("Performing product mixing routine for all products")
     
-    for i,v in pairs(config) do
+    for i,v in pairs(config.mixing) do
         if not v.facility then
             table.insert(notProduced, v)
         else
@@ -358,15 +437,28 @@ local function mixAllProducts()
     print("Finished iteration of product mixing routine for all products")
 end
 
+---@param name string
+---@return number
+local function getId(name)
+    local m = string.sub(string.match(name, "_%d+", 1), 2)
+    local n = tonumber(m)
+    assert(n, "Could not obtain a valid id from peripheral "..name)
+    return n
+end
+
 local function reloadTankConfig()
     print("-------- Loading tank config")
     print("Reading mixer settings")
-    minimumThreshold = settings.get("fluids.minimumTreshold", 0.5)
+    minimumThreshold = settings.get("fluids.minimumThreshold", 0.5)
 
+    melters = {}
     tanks = {}
     freeMixers = {}
     freeTanks = {}
     config = loadfile("setup.lua")()
+
+    local mixerIds = {}
+    local burnerIds = {}
 
     local foundTanks = false
     assert(type(config) == "table", "config is unexpectedly nil or not a table")
@@ -394,7 +486,19 @@ local function reloadTankConfig()
             ---@diagnostic disable-next-line: param-type-mismatch
             local peri = createMixerObject(name, wrapped)
             table.insert(freeMixers, peri)
+            mixerIds[getId(name)] = peri;
+
+        elseif string.find(name, "tconstruct:seared_melter", 1, true) then
+            ---@diagnostic disable-next-line: param-type-mismatch
+            local peri = createMelterObject(name, wrapped)
+            table.insert(melters, peri)
+        
+        elseif string.find(name, "createaddition:liquid_blaze_burner", 1, true) then
+            ---@diagnostic disable-next-line: param-type-mismatch
+            local peri = createBurnerObject(name, wrapped)
+            burnerIds[getId(name)] = peri;
         end
+
        return false
     end)
 
@@ -405,6 +509,25 @@ local function reloadTankConfig()
     print("Emptying "..#freeMixers.." mixers")
     for i,v in ipairs(freeMixers) do
         emptyMixer(v)
+    end
+
+    if config.heatPairs then
+        print("Pairing up mixers and burners")
+        for i,hp in ipairs(config.heatPairs) do
+            ---@type mixerPeripheral
+            local m = mixerIds[hp.mixer]
+    
+            ---@type burnerPeripheral
+            local b = burnerIds[hp.burner]
+            if m and b then
+                m.burner = b
+                print("Paired mixer "..hp.mixer.." with burner "..hp.burner)
+            end
+        end
+
+        for i,v in ipairs(freeMixers) do
+            if not v.burner then error("Not all mixers have burners attached to them. Please make sure all mixers have burners or disable burners by setting heatPairs to nil") end;
+        end
     end
 
     print("Loaded tank config and scanned peripherals")
