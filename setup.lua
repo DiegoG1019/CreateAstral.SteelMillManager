@@ -9,7 +9,7 @@ end
 local c = {
     ["mixing"] = {
         {
-            ["cutoff"] = .5,
+            ["cutoff"] = 1,
             ["product"] = "tconstruct:molten_rose_gold",
             ["recipe"] = {
                 ["items"] = {},
@@ -20,13 +20,25 @@ local c = {
             }
         },
         {
-            ["cutoff"] = .8,
+            ["cutoff"] = 1,
             ["product"] = "tconstruct:molten_brass",
             ["recipe"] = {
                 ["items"] = {},
                 ["fluids"] = {
                     "tconstruct:molten_zinc",
                     "tconstruct:molten_copper",
+                }
+            },
+            ["heatLevel"] = 1
+        },
+        {
+            ["cutoff"] = 1,
+            ["product"] = "tconstruct:molten_electrum",
+            ["recipe"] = {
+                ["items"] = {},
+                ["fluids"] = {
+                    "tconstruct:molten_silver",
+                    "tconstruct:molten_gold",
                 }
             },
             ["heatLevel"] = 1
